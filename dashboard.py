@@ -11,14 +11,13 @@ color_map = ['#F58220', '#043B72','#00A9CE', '#F0B26B', '#8DC8E8','#CB6015','#AE
 st.set_page_config(page_title='Invest Pool Dashboard', layout='wide')
 today = datetime.today().strftime('%y-%m-%d')
 
-st.write(today)
-
 def connect_to_db(username, password, host, port, service_name):
     dsn = co.makedsn(host, port, sid=service_name)
     conn = co.connect(username, password, dsn)
     return conn
 
 db_secrets = st.secrets["m_db"]
+st.write(db_secrets)
 username = db_secrets["username"]
 password = db_secrets["password"]
 host = db_secrets["host"]
