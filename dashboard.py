@@ -11,16 +11,6 @@ color_map = ['#F58220', '#043B72','#00A9CE', '#F0B26B', '#8DC8E8','#CB6015','#AE
 st.set_page_config(page_title='Invest Pool Dashboard', layout='wide')
 today = datetime.today().strftime('%y-%m-%d')
 
-def connect_to_db(username, password, host, port, service_name):
-  if "db_connection" not in st.session_state:
-    try:
-      dsn = co.makedsn(host, port, sid=service_name)
-      conn = co.connect(username, password, dsn)
-      return conn
-    except co.DatabaseError as e:
-      st.error(f"Database connection failed: {str(e)}")
-    
-
 db_secrets = st.secrets["m_db"]
 username = db_secrets["username"]
 password = db_secrets["password"]
@@ -29,11 +19,18 @@ port = db_secrets["port"]
 service_name = db_secrets["service_name"]
 
 @st.cache_data
+@st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
-    conn = connect_to_db(username, password, host, port, service_name)
-    df = pd.read_sql(sql, con=conn)
-    conn.close()
-    return df
+  if "db_connection" not in st.session_state:
+    try:
+      dsn = co.makedsn(host, port, sid=service_name)
+      conn = co.connect(username, password, dsn)
+      df = pd.read_sql(sql, con=conn)
+      conn.close()
+      return df
+    except co.DatabaseError as e:
+      st.error(f"Database connection failed: {str(e)}")
+  
 
 def calculate_period_return(group):
     start_value = group.iloc[0]["CLOSE_INDEX"]
