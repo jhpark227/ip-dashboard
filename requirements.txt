@@ -1,6 +1,6 @@
 pandas
 numpy
 datetime
-cx_Oracle
+cx_Oracle = 8.3.0
 altair
-streamlit
+streamlit = 1.40.1
