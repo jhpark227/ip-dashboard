@@ -19,12 +19,13 @@ port = db_secrets["port"]
 service_name = db_secrets["service_name"]
 
 @st.cache_data
-@st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
   if "db_connection" not in st.session_state:
     try:
       dsn = co.makedsn(host, port, sid=service_name)
+	st.write(dsn)
       conn = co.connect(username, password, dsn)
+	    st.write(conn
       df = pd.read_sql(sql, con=conn)
       conn.close()
       return df
