@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import cx_Oracle as co
 from datetime import datetime, timedelta
 import altair as alt
 import oracledb as od
