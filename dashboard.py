@@ -17,7 +17,6 @@ def connect_to_db(username, password, host, port, service_name):
     return conn
 
 db_secrets = st.secrets["m_db"]
-st.write(db_secrets)
 username = db_secrets["username"]
 password = db_secrets["password"]
 host = db_secrets["host"]
@@ -31,8 +30,6 @@ def db_connect(sql, username=username, password=password, host=host, port=port, 
     conn.close()
     return df
 
-
-
 def calculate_period_return(group):
     start_value = group.iloc[0]["CLOSE_INDEX"]
     end_value = group.iloc[-1]["CLOSE_INDEX"]
@@ -43,18 +40,16 @@ def get_period_value(group):
     end_value = group.iloc[-1]["CLOSE_INDEX"]
     return start_value, end_value
 
-
 def convert_name(data:list):
     return [x.replace('투자풀', '').replace('[주식]','').replace('(주식)','') for x in data]
 
 sql_date = '''
-			SELECT 
-                BF_TRD_DT
-                ,BF2_TRD_DT
-            FROM AMAKT.FSBD_DT_INFO 
-            WHERE BASE_DT = '{targetdate}'
-			'''.format(targetdate=today)
-
+		SELECT 
+	                BF_TRD_DT
+	                ,BF2_TRD_DT
+            	FROM AMAKT.FSBD_DT_INFO 
+            	WHERE BASE_DT = '{targetdate}'
+	'''.format(targetdate=today)
 
 def main() :
     # 사이드바(Sidebar)
@@ -62,8 +57,6 @@ def main() :
     default_date = date_info['BF_TRD_DT'][0]
     default_date_before = date_info['BF2_TRD_DT'][0]
     
-        
-
     with st.sidebar:
         st.title('Invest Pool Dashboard')
         st.markdown(
