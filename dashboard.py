@@ -53,7 +53,8 @@ sql_date = '''
 
 def main() :
     # 사이드바(Sidebar)
-    date_info = db_connect(sql_date, username, password, host, port, service_name)
+    st.write(username, password, host, port, service_name)
+    date_info = db_connect(sql_date)
     default_date = date_info['BF_TRD_DT'][0]
     default_date_before = date_info['BF2_TRD_DT'][0]
     
