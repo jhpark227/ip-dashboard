@@ -1,6 +1,5 @@
 pandas
 numpy
-cx_Oracle
 datetime
 altair
 streamlit
