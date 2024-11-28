@@ -21,17 +21,15 @@ service_name = db_secrets["service_name"]
 
 @st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
-
     dsn = od.makedsn(host, port, service_name=service_name)
     with od.connect(user=username, password=password, dsn=dsn) as connection:
         # 커서 생성 및 쿼리 실행
         with connection.cursor() as cursor:
             cursor.execute(sql)
-            
+
             # 결과 가져오기
             columns = [col[0] for col in cursor.description]  # 컬럼 이름 가져오기
             rows = cursor.fetchall()  # 모든 데이터 가져오기
-
             df = pd.DataFrame(rows, columns=columns)
         
     return df
@@ -65,7 +63,7 @@ def main() :
     date_info = db_connect(sql_date)
     default_date = date_info['BF_TRD_DT'][0]
     default_date_before = date_info['BF2_TRD_DT'][0]
-    
+    st.dataframe(date_info)
 
     with st.sidebar:
         st.title('Invest Pool Dashboard')
