@@ -27,6 +27,7 @@ def db_connect(sql, username=username, password=password, host=host, port=port, 
       conn = co.connect(username, password, dsn)
       st.write(conn)
       df = pd.read_sql(sql, con=conn)
+      st.dataframe(df)
       conn.close()
       return df
     except co.DatabaseError as e:
