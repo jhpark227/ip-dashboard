@@ -12,13 +12,14 @@ st.set_page_config(page_title='Invest Pool Dashboard', layout='wide')
 today = datetime.today().strftime('%y-%m-%d')
 
 def connect_to_db(username, password, host, port, service_name):
-	if "db_connection" not in st.session_state:
-	    try:
-    		dsn = co.makedsn(host, port, sid=service_name)
-    		conn = co.connect(username, password, dsn)
-	    except cx_Oracle.DatabaseError as e:
-		    st.error(f"Database connection failed: {str(e)}")
-    return conn
+  if "db_connection" not in st.session_state:
+    try:
+      dsn = co.makedsn(host, port, sid=service_name)
+      conn = co.connect(username, password, dsn)
+      return conn
+    except co.DatabaseError as e:
+      st.error(f"Database connection failed: {str(e)}")
+    
 
 db_secrets = st.secrets["m_db"]
 username = db_secrets["username"]
