@@ -1,11 +1,9 @@
-# 스트림릿 라이브러리를 사용하기 위한 임포트
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import altair as alt
 import oracledb as od
-
 
 color_map = ['#F58220', '#043B72','#00A9CE', '#F0B26B', '#8DC8E8','#CB6015','#AE634E', '#84888B','#7EA0C3', '#C2AC97', '#0086B8']
 
@@ -19,13 +17,10 @@ host = db_secrets["host"]
 port = db_secrets["port"]
 service_name = db_secrets["service_name"]
 
-st.write(db_secrets)
-
 @st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
     dsn = od.makedsn(host, port, service_name=service_name)
     with od.connect(user=username, password=password, dsn=dsn) as connection:
-        # 커서 생성 및 쿼리 실행
         with connection.cursor() as cursor:
             cursor.execute(sql)
 
