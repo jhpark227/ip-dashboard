@@ -19,6 +19,8 @@ host = db_secrets["host"]
 port = db_secrets["port"]
 service_name = db_secrets["service_name"]
 
+st.write(db_secrets)
+
 @st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
     dsn = od.makedsn(host, port, service_name=service_name)
