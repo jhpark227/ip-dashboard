@@ -9,7 +9,7 @@ color_map = ['#F58220', '#043B72','#00A9CE', '#F0B26B', '#8DC8E8','#CB6015','#AE
 
 st.set_page_config(page_title='Invest Pool Dashboard', layout='wide')
 today = datetime.today().strftime('%Y-%m-%d')
-st.write(today)
+
 db_secrets = st.secrets["m_db"]
 username = db_secrets["username"]
 password = db_secrets["password"]
