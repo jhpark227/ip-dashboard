@@ -23,9 +23,9 @@ def db_connect(sql, username=username, password=password, host=host, port=port, 
   if "db_connection" not in st.session_state:
     try:
       dsn = co.makedsn(host, port, sid=service_name)
-	st.write(dsn)
+      st.write(dsn)
       conn = co.connect(username, password, dsn)
-	    st.write(conn)
+      st.write(conn)
       df = pd.read_sql(sql, con=conn)
       conn.close()
       return df
