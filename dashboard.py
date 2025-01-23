@@ -1,3 +1,4 @@
+# 스트림릿 라이브러리를 사용하기 위한 임포트
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,14 +20,17 @@ service_name = db_secrets["service_name"]
 
 @st.cache_data
 def db_connect(sql, username=username, password=password, host=host, port=port, service_name=service_name):
+
     dsn = od.makedsn(host, port, service_name=service_name)
     with od.connect(user=username, password=password, dsn=dsn) as connection:
+        # 커서 생성 및 쿼리 실행
         with connection.cursor() as cursor:
             cursor.execute(sql)
-
+            
             # 결과 가져오기
             columns = [col[0] for col in cursor.description]  # 컬럼 이름 가져오기
             rows = cursor.fetchall()  # 모든 데이터 가져오기
+
             df = pd.DataFrame(rows, columns=columns)
         
     return df
@@ -60,13 +64,14 @@ def main() :
     date_info = db_connect(sql_date)
     default_date = date_info['BF_TRD_DT'][0]
     default_date_before = date_info['BF2_TRD_DT'][0]
+    
 
     with st.sidebar:
         st.title('Invest Pool Dashboard')
         st.markdown(
                         """
                         <p style="font-size:14px; color:#7EA0C3;">
-                            <em>Prototype v0.1.3</em>
+                            <em>Prototype v0.2.1</em>
                         </p>
                         """,
                         unsafe_allow_html=True
@@ -74,6 +79,8 @@ def main() :
 
         startdate = st.date_input('Start Date: ', value=default_date_before)
         enddate = st.date_input('End Date: ', value=default_date)
+
+        
 
     mkt_index_sql = '''
                 WITH BM_INFO AS (	
@@ -117,25 +124,31 @@ def main() :
     '''.format(startdate=startdate, enddate=enddate)
     
     bm_sql = '''
-            SELECT B.WKDATE AS 일자
-                , B.JNAME AS 종목명
-                , B.INDUSTRY_LEV1_NM AS 대분류
-                , B.INDUSTRY_LEV2_NM AS 중분류
-                , B.INDUSTRY_LEV3_NM AS 소분류
-                , A.INDEX_NAME_KR AS BM명 
-                , A.INDEX_WEIGHT AS BM비중
-                , ROUND(B.RATE/100, 4) AS 일수익률
+            SELECT 일자, 종목명, 대분류, 중분류, 소분류, BM명
+                , ROUND(INDEX_MARKET_CAP*100/SUM(INDEX_MARKET_CAP) OVER (PARTITION BY 일자, BM명), 6) AS BM비중
+                , 일수익률
+            FROM (
+                    SELECT B.WKDATE AS 일자
+                        , B.JNAME AS 종목명
+                        , B.INDUSTRY_LEV1_NM AS 대분류
+                        , B.INDUSTRY_LEV2_NM AS 중분류
+                        , B.INDUSTRY_LEV3_NM AS 소분류
+                        , A.INDEX_NAME_KR AS BM명 
+                        , A.INDEX_WEIGHT AS BM비중
+                        , A.INDEX_MARKET_CAP
+                        , ROUND(B.RATE/100, 6) AS 일수익률
 
-            FROM AMAKT.E_MA_KRX_PKG_CONST A
+                    FROM AMAKT.E_MA_KRX_PKG_CONST A
 
-            LEFT JOIN AMAKT.E_MA_FN_JONGMOK_INFO B
-                ON A.FILE_DATE = B.WKDATE
-                AND A.CONSTITUENT_ISIN = B.STDJONG
-                AND B.INDEX_ID IN ('I.001', 'I.201')
-            WHERE A.FILE_DATE BETWEEN TO_DATE('{startdate}', 'YYYY-MM-DD') AND TO_DATE('{enddate}', 'YYYY-MM-DD')
-            AND A.INDEX_CODE1 IN ('1', '2')  -- 1:코스피, 2:코스닥
-            AND A.INDEX_CODE2 IN ('001')  -- 001:코스피, 029:코스피200
-            ORDER BY INDEX_NAME_KR DESC, INDEX_WEIGHT DESC
+                    LEFT JOIN AMAKT.E_MA_FN_JONGMOK_INFO B
+                        ON A.FILE_DATE = B.WKDATE
+                        AND A.CONSTITUENT_ISIN = B.STDJONG
+                        AND B.INDEX_ID IN ('I.001', 'I.201')
+                    WHERE A.FILE_DATE BETWEEN TO_DATE('{startdate}', 'YYYY-MM-DD') AND TO_DATE('{enddate}', 'YYYY-MM-DD')
+                    AND A.INDEX_CODE1 IN ('1', '2')  -- 1:코스피, 2:코스닥
+                    AND A.INDEX_CODE2 IN ('001')  -- 001:코스피, 029:코스피200
+            )
+            ORDER BY BM명 DESC, BM비중 DESC
         '''.format(startdate=startdate, enddate=enddate)
 
     bm_df = db_connect(bm_sql)
@@ -143,6 +156,8 @@ def main() :
     bm_df['일자'] = pd.to_datetime(bm_df['일자']).dt.date
     
     bm_df_lastday = bm_df[bm_df['일자'] == bm_df['일자'].max()].drop('일자', axis=1).set_index('종목명')
+
+   
 
 
     df_sql = '''
@@ -256,82 +271,10 @@ def main() :
             AND B.INDEX_WEIGHT <> 0 
         '''.format(startdate=startdate , enddate= enddate)
 
-
-    fund_sql = '''
-                WITH RAWDATA AS (
-                    SELECT  e.BASE_DT,k.PTF_CD, k.SUB_PTF_CD , m.KOR_NM AS FUND_NM
-                            , NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) AS ISIN_CD
-                            , NVL(sm.KOR_NM, em.KOR_NM) AS KOR_NM                             -- 선물 내 이름 사용 후 없으면 주식 이름 사용
-                            , n.NET_AST_TOT_AMT AS FUND_NAV , k.WGT AS FUND_WGT
-                            , SUM(e.EVL_AMT * NVL(w.WGT, 1)) AS EVL_AMT                        -- 선물 내 비중이 있으면 곱해주고 그게 아니라면 주식이니 그냥 1 곱합
-                    FROM    AIVSTP.FSBD_PTF_MSTR m
-                            INNER JOIN		(		
-                                                SELECT 	 BASE_DT, PTF_CD, ISIN_CD AS SUB_PTF_CD , EVL_AMT , WGT 
-                                                FROM	 AIVSTP.FSCD_PTF_ENTY_EVL_COMP e1
-                                                WHERE	     BASE_DT = TO_DATE('{enddate}', 'YYYY-MM-DD')
-                                                    AND 	 DECMP_TCD = 'U'
-                                                    AND      AST_CD IN ('SFD', 'FND')
-                                                    AND 	 PTF_CD IN ('308645', '308648','308604','308609','308611','308614','308615','308620', '308626','308627','308644','308650','308671','308673','308683','308691','308703')
-                                            ) k
-                                    ON      m.PTF_CD = k.SUB_PTF_CD
-                                    AND     m.KOR_NM LIKE '%주식%'
-
-                            LEFT JOIN 			AIVSTP.FSCD_PTF_ENTY_EVL_COMP e
-                                        ON 		k.SUB_PTF_CD = e.PTF_CD 
-                                        AND 	e.BASE_DT = k.BASE_DT
-                                        AND 	e.DECMP_TCD =  'E' --  개별펀드는 'E'로 분해
-                                        AND 	e.AST_CD  IN  ('STK', 'SFT')  					 -- 주식과 선물 포함, 참고로 'A'로 분해시 ETF까지는 분해되어 있음	
-                            LEFT OUTER JOIN 	AMAKT.FSBD_ERM_STK_MAP_MT em                 	 -- 삼성전자우 와 같은 종목을 삼성전자로 인식하기 위해 필요
-                                            ON 	e.ISIN_CD = em.ISIN_CD
-                            LEFT OUTER JOIN 	AMAKT.FSBD_ERM_IDX_ENTY_WGT w                    -- 선물 분해 로직
-                                            ON 	NVL(em.RM_ISIN_CD, e.ISIN_CD) = w.IDX_CD      	 -- 선물의 RM_ISIN_CD 를 활용해서 연결
-                                            AND e.BASE_DT = w.BASE_DT 
-                            LEFT OUTER JOIN     AMAKT.FSBD_ERM_STK_MAP_MT sm                  	 -- em 테이블에서 했던 것 동일 반복
-                                            ON  w.ISIN_CD = sm.ISIN_CD 
-                            LEFT OUTER JOIN		AIVSTP.FSCD_PTF_EVL_COMP n 
-                                            ON  e.BASE_DT = n.BASE_DT   
-                                            AND m.PTF_CD = n.PTF_CD  	       
-                                            
-                    GROUP BY  e.BASE_DT, k.PTF_CD, k.SUB_PTF_CD,  m.KOR_NM,  NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) 
-                            , NVL(sm.KOR_NM, em.KOR_NM) , n.NET_AST_TOT_AMT, k.WGT 	    
-                    )
-            , LIST_EQ_BM AS
-                        (
-                        SELECT DISTINCT BASE_DT, SUB_PTF_CD, SUB_F_ID, ZR_CODE, SUB_FUND_NM, SUB_FUND_TYP, SUB_BM_NM
-                        FROM POLSEL.V_FUND_EQUITY_BM
-                        WHERE BASE_DT = TO_DATE('{enddate}', 'YYYY-MM-DD')
-                        
-                        ) 
-                        
-            , RAWDATA2 AS (
-                            SELECT A.BASE_DT, A.PTF_CD, A.SUB_PTF_CD, A.FUND_NM, ROUND(A.FUND_WGT, 6) AS FUND_WGT
-                            FROM RAWDATA A
-                            WHERE A.ISIN_CD IS NOT NULL
-                            GROUP BY A.BASE_DT, A.PTF_CD, A.SUB_PTF_CD, A.FUND_NM, A.FUND_WGT
-                            )
-
-            SELECT PTF_CD, 액티브주식형, 인덱스주식형
-            FROM (
-                    SELECT DISTINCT PTF_CD, BASE_DT, SUB_FUND_TYP, SUM(FUND_WGT) OVER (PARTITION BY PTF_CD, SUB_FUND_TYP) AS FUND_WGT_SUM
-                    FROM (
-                            SELECT A.BASE_DT, A.PTF_CD, L.SUB_FUND_NM, L.SUB_FUND_TYP, A.FUND_WGT
-                            FROM RAWDATA2 A
-                            LEFT JOIN LIST_EQ_BM L
-                                ON A.SUB_PTF_CD = L.SUB_PTF_CD
-                                AND A.BASE_DT = L.BASE_DT
-                        )
-                    GROUP BY BASE_DT, PTF_CD, SUB_FUND_TYP, FUND_WGT
-                )
-            PIVOT (
-                    SUM(FUND_WGT_SUM)
-                    FOR SUB_FUND_TYP IN ('액티브주식형' AS 액티브주식형, '인덱스주식형' AS 인덱스주식형)
-                    )
-            ORDER BY PTF_CD
-    '''.format(enddate=enddate)
-
-
+    
+    
+    
     df = db_connect(df_sql)
-
     df = df[df['일자']!=df['일자'].min()]
 
     df['펀드명'] = convert_name(df['펀드명']) # 펀드명 간소화
@@ -378,6 +321,8 @@ def main() :
             (k200_st_index, k200_index), (k200esg_st_index, k200esg_index) = market_df.sort_values(by="WKDATE").groupby("KFNAME").apply(get_period_value)
         
     
+    sectors = pfo_status[['대분류','중분류','소분류']]
+    
 
 
     # 펀드별 보유현금 및 현금 기여도
@@ -397,87 +342,77 @@ def main() :
     pfo_status_sector_lvl3 = pd.concat([pfo_status_sector_lvl3, cash_status], axis=0).fillna(0)
 
 
-    bm_df_temp = bm_df[bm_df['일자']!=bm_df['일자'].min()].reset_index(drop=True)
-    not_in_pfo = [x for x in bm_df_lastday.index if x not in pfo_status.index] # 어떤 펀드도 가지고 있지 않은 종목들
-    temp = bm_df_temp[bm_df_temp['종목명'].isin(not_in_pfo)].reset_index(drop=True) # 그런 종목들의 BM 비중과 일 수익률 추출
-    temp = temp[temp['BM명']=='코스피'] # 그 중 코스피 속한 종목만
-    temp['일기여도'] = (0 - temp['BM비중']) * temp['일수익률'] * 100    # 펀드에서 갖고있진 않지만 코스피 상장 종목 > 미보유한 만큼 수익률 기여
-                                                                    # 코스닥 종목 중 미보유는 BM 대비 수익률에 기여 0 이니까
+    ########################################################################################################################################
+    
+    bm_temp = bm_df.copy()
+    # 코스피 종목 중 미보유 종목에 대해 일자별 기여도 산출 
+    bm_temp['BM기여도'] = np.where(bm_temp["BM명"]=="코스피", (0-bm_temp["BM비중"])*bm_temp['일수익률']*100, 0) 
+    bm_temp = bm_temp.pivot_table(index='종목명', columns='일자', values='BM기여도')
 
-    ctb_others = temp.pivot_table(index='종목명', columns='일자', values='일기여도').sum(axis=1)
+    # 코스피에 있는 종목 중 포트폴리오에 없는 경우 bm기여도 채우기
+    result = {}
+    for fund in column_order:
+        temp = df[df['펀드명']==fund].pivot_table(index='종목명', columns='일자', values='일기여도')
+        result[fund] = temp.where(temp.notna(), bm_temp)  
+        
+    # 기여도 합으로 Dataframe 생성
+    ctb_by_stock = bm_df_lastday.copy()
+    for fund in column_order:
+        a = pd.DataFrame(result[fund].sum(axis=1), columns=[f"{fund}"])
+        ctb_by_stock = ctb_by_stock.join(a)
+
+    # 코스닥 종목의 NaN 값은 0으로 채우기 (보유하지 않은 종목이므로)
+    ctb_by_stock.loc[ctb_by_stock['BM명']=='코스닥', column_order] = ctb_by_stock.loc[ctb_by_stock['BM명']=='코스닥', column_order].fillna(0)
+
+    # 어디에도 속하지 않은 종목들은 코스피의 경우 BM기여도 채우기
+    bm_df_temp = bm_df[bm_df['일자']!=bm_df['일자'].min()].reset_index(drop=True)
+    not_in_pfo = ctb_by_stock[ctb_by_stock[column_order].sum(axis=1)==0].index
+    ret_others = bm_df_temp[bm_df_temp['종목명'].isin(not_in_pfo)].reset_index(drop=True)
+    ret_others['일기여도'] = np.where(ret_others['BM명']=='코스피', (0 - ret_others['BM비중']) * ret_others['일수익률'] * 100, 0)
+    ctb_others = ret_others.pivot_table(index='종목명', columns='일자', values='일기여도').sum(axis=1)
     ctb_others = pd.DataFrame(np.array([ctb_others]*len(column_order)).T, columns=column_order, index= ctb_others.index)
 
-    a = pfo_status[pfo_status['BM명']=='코스피'][column_order]
-    in_pfo_zero = list(a[a.min(axis=1)==0].index)
+    ctb_by_stock.update(ctb_others)
 
-    temp = bm_df_temp[bm_df_temp['종목명'].isin(in_pfo_zero)].reset_index(drop=True)
-    temp = temp[temp['BM명']=='코스피']
-    temp['일기여도'] = (0 - temp['BM비중']) * temp['일수익률'] * 100
-    ctb_others2 = temp.pivot_table(index='종목명', columns='일자', values='일기여도').sum(axis=1)
+    # 다른 펀드에는 있지만 일부 펀드는 한번도 보유하지 않은 종목
+    in_pfo_zero = ctb_by_stock[ctb_by_stock.isna().any(axis=1)].index
+    ret_others = bm_df_temp[bm_df_temp['종목명'].isin(in_pfo_zero)].reset_index(drop=True)
+    ret_others['일기여도'] = np.where(ret_others['BM명']=='코스피', (0 - ret_others['BM비중']) * ret_others['일수익률'] * 100, 0)
+
+    ctb_others2 = ret_others.pivot_table(index='종목명', columns='일자', values='일기여도').sum(axis=1)
     ctb_others2 = pd.DataFrame(ctb_others2, columns=['일기여도'])
-
-
-    ctb_by_stock = df.pivot_table(index='종목명', columns='펀드명', values='일기여도', aggfunc='sum', fill_value=0) 
-    ctb_by_stock = pd.concat([ctb_by_stock, ctb_others], axis=0)
-    ctb_by_stock = ctb_by_stock[column_order]
-    sorted_index = [idx for idx in bm_df_lastday.index if idx in ctb_by_stock.index]
-    ctb_by_stock = ctb_by_stock.join(bm_df_lastday, how='left')
-    ctb_by_stock = ctb_by_stock[list(bm_df_lastday.columns)+column_order]
-    ctb_by_stock = ctb_by_stock.loc[sorted_index].round(4)
 
     b = ctb_by_stock[ctb_by_stock['BM명']=='코스피']
     c = b.merge(ctb_others2, left_on=b.index, right_on=ctb_others2.index, suffixes=("","_B"))
-
     for col in column_order:
         c[col] = c.apply(
-                                lambda row: row["일기여도"] if row[col] == 0 else row[col],
-                                axis=1
-                                )
+                        lambda row: row["일기여도"] if pd.isna(row[col]) else row[col],
+                        axis=1
+                        )
+
     c = c.set_index('key_0').drop(columns=['일기여도']).round(4)
     c.index.name = '종목명'
     ctb_by_stock.update(c)
-
     ctb_by_stock.rename(columns=dict_corp_name, inplace=True)
+
+
+
 
     ctb_by_sector = ctb_by_stock.groupby(by='대분류')[corp_list].sum().round(4)
     ctb_by_sector = pd.concat([ctb_by_sector, ctb_cash], axis=0)
 
+    ctb_by_sector_lvl2 = ctb_by_stock.groupby(by='중분류')[corp_list].sum().round(4)
+    ctb_by_sector_lvl2 = pd.concat([ctb_by_sector_lvl2, ctb_cash], axis=0)
+
+    ctb_by_sector_lvl3 = ctb_by_stock.groupby(by='소분류')[corp_list].sum().round(4)
+    ctb_by_sector_lvl3 = pd.concat([ctb_by_sector_lvl3, ctb_cash], axis=0)
+
+
     top_funds = pd.DataFrame(ctb_by_sector.sum(axis=0), columns=['기여도합(bp)']).sort_values(by='기여도합(bp)', ascending=False).round(4)
     top_funds.index.name = '운용사'
 
-
-
-    # df_funds = db_connect(fund_sql)
-    # t_fund_dict = dict()
-    # case = {
-    #         '308604':'투자풀통합38호',
-    #         '308609':'투자풀통합60호',
-    #         '308611':'투자풀통합69호',
-    #         '308614':'투자풀통합ESG81호',
-    #         '308615':'투자풀통합86호',
-    #         '308620':'투자풀통합99호',
-    #         '308626':'투자풀통합116호',
-    #         '308627':'투자풀통합117호',
-    #         '308645':'투자풀통합ESG2호',
-    #         '308650':'투자풀통합138호',
-    #         '308671':'투자풀통합157호',
-    #         '308703':'투자풀통합187호',
-    #         '308644':'투자풀통합135호',
-    #         '308648':'투자풀통합ESG4호',
-    #         '308673':'투자풀통합159호',
-    #         '308683':'투자풀통합168호',
-    #         '308691':'투자풀통합174호'
-    #         }
-    # t_fund_dict.update(case)
-    # df_funds['PTF_CD'] = df_funds['PTF_CD'].map(t_fund_dict)
-    # df_funds = df_funds.fillna(0)
-    # df_funds['액티브주식형'] = df_funds['액티브주식형']/(df_funds['액티브주식형']+df_funds['인덱스주식형'])
-    # df_funds['인덱스주식형'] = 1 - df_funds['액티브주식형']
-    # df_funds = df_funds[df_funds['액티브주식형']!=0]
-    # df_funds.set_index('PTF_CD', inplace=True)
-
     
-    tab1, tab2 = st.tabs(['현황', '기여도'])
+    tab1, tab2 , tab3= st.tabs(['현황', '기여도', '통합펀드'])
     
     with tab1:
 
@@ -502,9 +437,23 @@ def main() :
                         """.format(enddate=enddate),
                         unsafe_allow_html=True
                     )
-        _, bc = st.columns([9.2, 0.8])
-        bc.download_button("Get Data", data=pfo_status.to_csv().encode('cp949'), file_name="Fund_Portfolio.csv", use_container_width=True)
-        st.dataframe(pfo_status.style.format(precision=2), height=400, use_container_width=True)
+        col1, _, col3 = st.columns([0.8, 8.4, 0.8])
+        col3.download_button("Get Data", data=pfo_status.to_csv().encode('cp949'), file_name="Fund_Portfolio.csv", use_container_width=True)
+        
+        pfo_status_vs_bm = pfo_status[column_order] - pfo_status[['BM비중']].values    
+        pfo_status_vs_bm = pd.concat([pfo_status.iloc[:,:6], pfo_status_vs_bm], axis=1)
+
+        comparison = col1.checkbox("BM 대비")
+
+        if comparison:
+            pfo_data = pfo_status_vs_bm
+        else:    
+            pfo_data = pfo_status
+
+        st.dataframe(pfo_data.style.format(precision=2),\
+                      height=400, use_container_width=True)
+        
+
         st.markdown(
                         """
                         <p style="font-size:15px; color:#C2AC97;">
@@ -515,6 +464,11 @@ def main() :
                     )
         
         st.divider()
+
+        # tt = pfo_status.copy()
+        # tt['BM수익률'] = tt['BM비중'] * tt['일수익률']
+        # tt2 = tt.groupby('대분류').agg({'BM수익률':'sum'})
+        # st.dataframe(tt2)
 
         col1, col2 = st.columns([6, 4])
         col1.subheader('섹터별 비중')
@@ -529,7 +483,7 @@ def main() :
                 st.dataframe(pfo_status_sector_lvl3.style.format(precision=2), height=425, use_container_width=True)
 
 
-        col2.subheader('BM 대비 비중')
+        col2.subheader('BM 대비 비중(펀드별)')
         option = col2.selectbox('Fund', column_order)           
 
         temp = pfo_status_sector[option] - pfo_status_sector['BM비중']
@@ -548,41 +502,86 @@ def main() :
         ).properties(height=330)
         col2.altair_chart(chart_temp, use_container_width=True)
 
-        # st.divider()
+        st.divider()
 
-        # cols = st.columns(4)
-        # for idx, row in enumerate(df_funds.iterrows()):
-        #     # 데이터 준비
-        #     pie_data = pd.DataFrame({
-        #         "Category": ["액티브주식형", "인덱스주식형"],
-        #         "Value": [row[1]["액티브주식형"], row[1]["인덱스주식형"]]
-        #     })
+        col1, col2 = st.columns([7, 3])
+        with col1:
+            st.subheader('섹터별 비중(Chart)')
+            options = list(pfo_status_sector.index)
+            selection = st.segmented_control(
+                '대분류', options, selection_mode='single'
+            )
+
+            if selection:
+                options_lvl2 = list(sectors[sectors['대분류']==selection]['중분류'].unique())
+                selection_lvl2 = st.segmented_control(
+                    '중분류', options_lvl2, selection_mode='single'
+                )
+
+                if selection_lvl2:
+                    selected = selection_lvl2
+                    df_sector = pfo_status_sector_lvl2
+
+                    options_lvl3 = list(sectors[sectors['중분류']==selection_lvl2]['소분류'].unique())
+                    selection_lvl3 = st.segmented_control(
+                        '소분류', options_lvl3, selection_mode='single'
+                    )
+
+                    if selection_lvl3:
+                        selected = selection_lvl3
+                        df_sector = pfo_status_sector_lvl3
+
+                else:
+                    selected = selection
+                    df_sector = pfo_status_sector
+                
+                result = pd.DataFrame(df_sector.loc[selected]).sort_values(by=selected, ascending=False)
+                
+                result = result.rename(index={'BM비중':'KOSPI'}, columns={selected:'비중'})
+                result.index.name = '펀드'
+                result = result.reset_index()
+
+                chart_temp = alt.Chart(result).mark_bar().encode(
+                y = alt.Y('비중:Q', axis=alt.Axis(title='비중', grid=False)),
+                x = alt.X('펀드:N', axis=alt.Axis(title='펀드', grid=False, labelAngle=-45), sort='-y'),
+                color = alt.condition(
+                            "datum.펀드 == 'KOSPI'",
+                            alt.value(color_map[0]),
+                            alt.value(color_map[1])
+                        )
+                ).properties(height=330, width=800).configure_axis(labelFontSize=14, titleFontSize=14)
+                st.altair_chart(chart_temp)
+
+        with col2:
+            st.subheader('개별펀드 코스닥 비중')
+            market_wgt = pfo_status.groupby('BM명')[column_order].sum().T
+            market_wgt.index.name = '개별펀드'
+            market_wgt.reset_index(inplace=True)
+            market_wgt = market_wgt[['개별펀드','코스닥']]
+            market_wgt = market_wgt.sort_values('코스닥', ascending=False)
+            # st.dataframe(market_wgt)
+            melted_df = market_wgt.melt(id_vars='개별펀드', var_name='코스닥', value_name='비율')
+
             
-        #     # Altair 파이 차트 생성
-        #     chart = alt.Chart(pie_data).mark_arc(outerRadius=100).encode(
-        #         theta=alt.Theta(field="Value", type="quantitative"),
-        #         color=alt.Color(field="Category", type="nominal", 
-        #                         scale=alt.Scale(scheme="tableau10"), legend=None),
-        #         tooltip=[alt.Tooltip(field="Category", type="nominal"),
-        #                 alt.Tooltip(field="Value", type="quantitative", format=".2%")]
-        #     ).properties(
-        #                 title=row[0]
-        #                 )
+            pie_chart = alt.Chart(melted_df).mark_arc(innerRadius=50).encode(
+                                theta=alt.Theta(field='비율', type='quantitative'),  # 비율 데이터
+                                color = alt.Color(
+                                            field='개별펀드',
+                                            type='nominal',
+                                            scale=alt.Scale(range=color_map),
+                                            sort=alt.EncodingSortField(
+                                                    field='비율',  # 비율 기준으로 정렬
+                                                    order='descending'  # 내림차순
+                                                ),
+                                        ),
+                                order=alt.Order(field='비율', type='quantitative', sort='descending')
+                            ).properties(
+                                width=330,
+                                height=330
+                            )
 
-        #     # 각 컬럼에 차트 표시
-        #     text = alt.Chart(pie_data).mark_text(radius=45, size=14, align="left").encode(
-        #             theta=alt.Theta(field="Value", type="quantitative"),
-        #             text=alt.Text(field="Value", type="quantitative", format=".2%"),
-        #             color=alt.value("black")
-        #         )
-
-        #     # 적절한 컬럼에 차트 표시
-        #     cols[idx % 4].altair_chart(chart + text, use_container_width=True)
-        #     if (idx + 1) % 4 == 0:
-        #         cols = st.columns(4)
-
-
-
+            st.altair_chart(pie_chart)
+        
 
     with tab2:
         st.subheader('종목별 수익률 기여도')
@@ -595,28 +594,428 @@ def main() :
 
         with col1:
             st.subheader('업종별 수익률 기여도')
-            # st.dataframe(ctb_by_sector.style.highlight_max(axis=0, color='#C9E6F0').highlight_min(axis=0, color='#FFE3E3').format(precision=2), height=425, use_container_width=True)
-            st.dataframe(ctb_by_sector.style.highlight_max(axis=0, color=color_map[0]).highlight_min(axis=0, color=color_map[1]).format(precision=2), height=425, use_container_width=True)
-            
+            st.dataframe(ctb_by_sector.style.highlight_max(axis=0, color='#C9E6F0').highlight_min(axis=0, color='#FFE3E3').format(precision=2),\
+                             height=425, use_container_width=True)
+            # st.dataframe(ctb_by_sector.style.highlight_max(axis=0, color=color_map[0]).highlight_min(axis=0, color=color_map[1]).format(precision=2),\
+            #               height=425, use_container_width=True)
+
         with col2:
             st.subheader('Top Funds')
             st.dataframe(top_funds.style.format(precision=2), height=425, use_container_width=True)
 
-        # st.divider()
+        st.divider()
 
+        # col1, _ = st.columns([1, 9])
+        # option = col1.selectbox('Sector Level', ['중분류', '소분류'])
 
-        # temp = ctb_by_sector[['마이다스']]
-        # temp.index.name = '섹터'
-        # temp = temp.reset_index()
+        st.subheader('See Details')
+        options = ['중분류','소분류']
+        selection = st.segmented_control(
+            'Sector Level', options, selection_mode='single'
+        )
 
+        if selection == '중분류':
+            st.dataframe(ctb_by_sector_lvl2.style.format(precision=2).background_gradient(cmap='YlGnBu'),height=600,use_container_width=True)
+        elif selection == '소분류':
+            st.dataframe(ctb_by_sector_lvl3.style.format(precision=2).background_gradient(cmap='YlGnBu'),height=800,use_container_width=True)
 
-        # chart_temp = alt.Chart(temp).mark_bar().encode(
-        #     x = alt.X('섹터:N', axis=alt.Axis(title='섹터', grid=False), sort='-y'),
-        #     y = alt.Y('마이다스:Q', axis=alt.Axis(title='기여도', grid=False))
-        # ).properties(width=1000, height=330)
-        # st.altair_chart(chart_temp)
+    with tab3:
         
+        st.subheader('통합펀드 내 개별펀드 비중')
+
+        ks_fund_dict = {'308620':'투자풀통합99호', '308626':'투자풀통합116호', '308703':'투자풀통합187호', '308604':'투자풀통합38호', '308611':'투자풀통합69호',
+                        '308614':'투자풀통합ESG81호', '308615':'투자풀통합86호', '308627':'투자풀통합117호', '308645':'투자풀통합ESG2호','308650':'투자풀통합138호',
+                        '308671':'투자풀통합157호'}
+
+        col1, col2, _ = st.columns([2, 2, 6])       
+        options = col1.selectbox("Selected Fund", list(ks_fund_dict.values()), index=None)
+        
+        if not options: 
+            pass
+        else:
+            targetfund = [key for key, value in ks_fund_dict.items() if value == options][0]
+    
+            total_df_sql = '''
+                    WITH KOSPI_SECTOR AS (
+                        SELECT
+                        WKDATE, INDEX_ID, STDJONG, JNAME, INDUSTRY_LEV1_NM, INDUSTRY_LEV2_NM, INDUSTRY_LEV3_NM
+                        FROM E_MA_FN_JONGMOK_INFO
+                        WHERE INDEX_ID IN ('I.001', 'I.201') --코스피
+                        AND WKDATE = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                        )
+                    , RAWDATA AS (		
+                                    
+                            SELECT     A.BASE_DT
+                                    , A.PTF_CD
+                                    , CASE WHEN INSTR( V.F_NM ,'혼합') > 0   THEN 1    -- 혼합형이면 1
+                                        ELSE 0                                      -- 혼합형 아니면 0
+                                    END AS FLAG
+                                    , A.SUB_FUND_CD
+                                    , A.FUND_WGT                    , A.FUND_NM
+                                    , A.ISIN_CD
+                                    , A.KOR_NM
+                                    , KS.INDUSTRY_LEV1_NM
+                                    , KS.INDUSTRY_LEV2_NM
+                                    , KS.INDUSTRY_LEV3_NM
+                                    , A.SEC_WGT
+                                    , ROUND(A.FUND_WGT * A.SEC_WGT / 100, 4) AS RESULT
+                                                
+                                    FROM       
+                                                (  
+                                                    SELECT   a.BASE_DT
+                                                            , a.PTF_CD
+                                                            , a.SUB_FUND_CD
+                                                            , a.FUND_NM
+                                                            , a.ISIN_CD
+                                                            , a.KOR_NM
+                                                            , a.FUND_NAV
+                                                            , a.FUND_WGT*100 AS FUND_WGT
+                                                            , a.SEC_WGT*100 AS SEC_WGT
+                                                            , NVL(SUBSTR(io.CLAS_CD, 1, 3), 'W00') AS GICS_LVL1
+                                                            , NVL(SUBSTR(io.CLAS_CD, 1, 5), 'W0000') AS GICS_LVL2
+                                                            , NVL(io.CLAS_CD, 'W000000') AS GICS_LVL3
+                                                    FROM    (       
+                                                            SELECT  BASE_DT, PTF_CD, SUB_FUND_CD, FUND_NM, ISIN_CD , KOR_NM, FUND_NAV, ROUND(FUND_WGT, 8) AS FUND_WGT
+                                                                    , ROUND(EVL_AMT/FUND_NAV,8) AS SEC_WGT
+                                                            FROM    (
+                                                                        SELECT  e.BASE_DT,e.PTF_CD, NULL AS SUB_FUND_CD, m.KOR_NM AS FUND_NM
+                                                                                , NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) AS ISIN_CD
+                                                                                , NVL(sm.KOR_NM, em.KOR_NM) AS KOR_NM                              -- 선물 내 이름 사용 후 없으면 주식 이름 사용
+                                                                                , n.NET_AST_TOT_AMT AS FUND_NAV, n.NET_AST_TOT_AMT/n.NET_AST_TOT_AMT AS FUND_WGT 
+                                                                                , SUM(e.EVL_AMT * NVL(w.WGT, 1)) AS EVL_AMT                        -- 선물 내 비중이 있으면 곱해주고 그게 아니라면 주식이니 그냥 1 곱합
+                                                                        FROM    AIVSTP.FSBD_PTF_MSTR m
+                                                                                INNER JOIN          AIVSTP.FSCD_PTF_ENTY_EVL_COMP e
+                                                                                            ON      m.PTF_CD = e.PTF_CD 
+                                                                                            AND     e.BASE_DT = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                                                                                            AND     e.DECMP_TCD =  'A'                               -- 통합펀드(PAR)의 경우에는 'A'로 분해, 개별펀드는 'E'로 분해
+                                                                                            AND     m.EX_TCD = e.EX_TCD                              -- KRW 
+                                                                                            AND     e.AST_CD  IN  ('STK', 'SFT')                     -- 주식과 선물 포함, 참고로 'A'로 분해시 ETF까지는 분해되어 있음
+                                                                            LEFT OUTER JOIN      AMAKT.FSBD_ERM_STK_MAP_MT em                 -- 삼성전자우 와 같은 종목을 삼성전자로 인식하기 위해 필요
+                                                                                                ON  e.ISIN_CD = em.ISIN_CD
+                                                                            LEFT OUTER JOIN      AMAKT.FSBD_ERM_IDX_ENTY_WGT w                    -- 선물 분해 로직
+                                                                                                ON  NVL(em.RM_ISIN_CD, e.ISIN_CD) = w.IDX_CD      -- 선물의 RM_ISIN_CD 를 활용해서 연결
+                                                                                                AND e.BASE_DT = w.BASE_DT 
+                                                                            LEFT OUTER JOIN      AMAKT.FSBD_ERM_STK_MAP_MT sm                  -- em 테이블에서 했던 것 동일 반복
+                                                                                                ON  w.ISIN_CD = sm.ISIN_CD   
+                                                                                LEFT OUTER JOIN     AIVSTP.FSCD_PTF_EVL_COMP n 
+                                                                                                ON  e.BASE_DT = n.BASE_DT   
+                                                                                                AND m.PTF_CD = n.PTF_CD     
+                                                                                                
+                                                                        WHERE m.PTF_CD = '{targetfund}'
+                                                                        GROUP BY  e.BASE_DT,e.PTF_CD,  m.KOR_NM,  NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) ,  NVL(sm.KOR_NM, em.KOR_NM) , n.NET_AST_TOT_AMT 
+                                                                        
+                                                                        UNION ALL               -- 개별펀드 포함
+                                                                                                                
+                                                                        SELECT  e.BASE_DT,k.PTF_CD, k.SUB_PTF_CD , m.KOR_NM AS FUND_NM
+                                                                                , NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) AS ISIN_CD
+                                                                                , NVL(sm.KOR_NM, em.KOR_NM) AS KOR_NM                             -- 선물 내 이름 사용 후 없으면 주식 이름 사용
+                                                                                , n.NET_AST_TOT_AMT AS FUND_NAV , k.WGT AS FUND_WGT
+                                                                                , SUM(e.EVL_AMT * NVL(w.WGT, 1)) AS EVL_AMT                        -- 선물 내 비중이 있으면 곱해주고 그게 아니라면 주식이니 그냥 1 곱합
+                                                                        FROM    AIVSTP.FSBD_PTF_MSTR m
+                                                                                INNER JOIN      (       
+                                                                                                    SELECT   BASE_DT, PTF_CD, ISIN_CD AS SUB_PTF_CD , EVL_AMT , WGT 
+                                                                                                    FROM     AIVSTP.FSCD_PTF_ENTY_EVL_COMP e1
+                                                                                                    WHERE        BASE_DT = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                                                                                                        AND      DECMP_TCD = 'U'
+                                                                                                        AND      AST_CD IN ('SFD', 'FND')
+                                                                                                        AND      PTF_CD = '{targetfund}'
+                                                                                                        
+                                                                                                ) k
+                                                                                        ON      m.PTF_CD = k.SUB_PTF_CD
+                                                                                        AND     m.KOR_NM LIKE '%주식%'
+                                                                                LEFT JOIN          AIVSTP.FSCD_PTF_ENTY_EVL_COMP e
+                                                                                            ON      k.SUB_PTF_CD = e.PTF_CD 
+                                                                                            AND     e.BASE_DT = k.BASE_DT
+                                                                                            AND     e.DECMP_TCD =  'E' --  개별펀드는 'E'로 분해
+                                                                                            AND     e.AST_CD  IN  ('STK', 'SFT')                     -- 주식과 선물 포함, 참고로 'A'로 분해시 ETF까지는 분해되어 있음         
+                                                                                LEFT OUTER JOIN     AMAKT.FSBD_ERM_STK_MAP_MT em                     -- 삼성전자우 와 같은 종목을 삼성전자로 인식하기 위해 필요
+                                                                                                ON  e.ISIN_CD = em.ISIN_CD
+                                                                                LEFT OUTER JOIN     AMAKT.FSBD_ERM_IDX_ENTY_WGT w                    -- 선물 분해 로직
+                                                                                                ON  NVL(em.RM_ISIN_CD, e.ISIN_CD) = w.IDX_CD         -- 선물의 RM_ISIN_CD 를 활용해서 연결
+                                                                                                AND e.BASE_DT = w.BASE_DT 
+                                                                                LEFT OUTER JOIN     AMAKT.FSBD_ERM_STK_MAP_MT sm                     -- em 테이블에서 했던 것 동일 반복
+                                                                                                ON  w.ISIN_CD = sm.ISIN_CD 
+                                                                                LEFT OUTER JOIN     AIVSTP.FSCD_PTF_EVL_COMP n 
+                                                                                                ON  e.BASE_DT = n.BASE_DT   
+                                                                                                AND m.PTF_CD = n.PTF_CD            
+                                                                                                
+                                                                        GROUP BY  e.BASE_DT, k.PTF_CD, k.SUB_PTF_CD,  m.KOR_NM,  NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) ,  NVL(sm.KOR_NM, em.KOR_NM) , n.NET_AST_TOT_AMT, k.WGT         
+                                                                    )
+                                                            ) a
+                                                            LEFT OUTER JOIN AMAKT.FSBD_ERM_STK_MAP_MT s
+                                                                    ON  a.ISIN_CD = s.ISIN_CD
+                                                            LEFT OUTER JOIN AMAKT.FSBD_ENTY_CCS_IO_MT io
+                                                                    ON  a.BASE_DT BETWEEN io.ST_DT AND io.END_DT 
+                                                                    AND NVL(s.RM_ISIN_CD, a.ISIN_CD) = io.ISIN_CD 
+                                                                    AND io.CCS_TCD = 'STK' 
+                                                                    AND io.CLAS_TYP = 'W3'
+                                                            LEFT OUTER JOIN AIVSTP.FSBD_CCS_MSTR c
+                                                                    ON io.CLAS_CD = c.CLAS_CD 
+                                                                    AND c.CCS_TCD = 'STK' 
+                                                                    AND c.CLAS_TYP = 'W'   
+                                                            ORDER BY a.PTF_CD, a.FUND_NM , a.ISIN_CD
+                                                        ) A
+                                    INNER JOIN KOSPI_SECTOR KS
+                                        ON A.ISIN_CD = KS.STDJONG                             
+                                    LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR B
+                                                    ON   B.CCS_TCD = 'STK' 
+                                                    AND  B.CLAS_CD = A.GICS_LVL1
+                                    LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR C
+                                                    ON   C.CCS_TCD = 'STK' 
+                                                    AND  C.CLAS_CD = A.GICS_LVL2
+                                    LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR D
+                                                    ON   D.CCS_TCD = 'STK' 
+                                                    AND  D.CLAS_CD = A.GICS_LVL3        
+                                    LEFT OUTER JOIN  
+                                                    (       
+                                                            SELECT  * 
+                                                            FROM    AMAKT.FSBD_ENTY_CCS_IO_MT
+                                                            WHERE  1=1
+                                                            AND   CCS_TCD = 'STK' 
+                                                            AND   CLAS_TYP = 'S'
+                                                    ) E
+                                            ON  A.ISIN_CD = E.ISIN_CD           
+                                            AND  A.BASE_DT   BETWEEN E.ST_DT AND E.END_DT 
+                                    INNER JOIN           POLSEL.V_FUND_CD  V
+                                                    ON   A.PTF_CD = V.AM_FUND_CD    
+                                                    WHERE FUND_WGT NOT LIKE '100'
+                                )
+                                
+                SELECT *
+                FROM ( SELECT FUND_NM, INDUSTRY_LEV1_NM, ROUND(SEC_WGT/100, 6) AS SEC_WGT
+                        FROM RAWDATA
+                    )
+                PIVOT (
+                        SUM(SEC_WGT)
+                        FOR INDUSTRY_LEV1_NM IN ('IT' AS IT, '경기소비재' AS 경기소비재, '금융' AS 금융, '산업재' AS 산업재, '소재' AS 소재, 
+                                            '에너지' AS 에너지, '유틸리티' AS 유틸리티, '의료' AS 의료, '통신서비스' AS 통신서비스, '필수소비재' AS 필수소비재)
+                        )
+                ORDER BY FUND_NM ASC
+
+            '''.format(targetdate=enddate, targetfund = targetfund)
+            
+            total_wgt_df_sql = '''
+                WITH KOSPI_SECTOR AS (
+                    SELECT
+                    WKDATE, INDEX_ID, STDJONG, JNAME, INDUSTRY_LEV1_NM, INDUSTRY_LEV2_NM, INDUSTRY_LEV3_NM
+                    FROM E_MA_FN_JONGMOK_INFO
+                    WHERE INDEX_ID IN ('I.001', 'I.201') --코스피
+                    AND WKDATE = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                    )
+                , RAWDATA AS (		
+                                
+                        SELECT     A.BASE_DT
+                                , A.PTF_CD
+                                , CASE WHEN INSTR( V.F_NM ,'혼합') > 0   THEN 1    -- 혼합형이면 1
+                                    ELSE 0                                      -- 혼합형 아니면 0
+                                END AS FLAG
+                                , A.SUB_FUND_CD
+                                , A.FUND_WGT                    , A.FUND_NM
+                                , A.ISIN_CD
+                                , A.KOR_NM
+                                , KS.INDUSTRY_LEV1_NM
+                                , KS.INDUSTRY_LEV2_NM
+                                , KS.INDUSTRY_LEV3_NM
+                                , A.SEC_WGT
+                                , ROUND(A.FUND_WGT * A.SEC_WGT / 100, 4) AS RESULT
+                                            
+                                FROM       
+                                            (  
+                                                SELECT   a.BASE_DT
+                                                        , a.PTF_CD
+                                                        , a.SUB_FUND_CD
+                                                        , a.FUND_NM
+                                                        , a.ISIN_CD
+                                                        , a.KOR_NM
+                                                        , a.FUND_NAV
+                                                        , a.FUND_WGT*100 AS FUND_WGT
+                                                        , a.SEC_WGT*100 AS SEC_WGT
+                                                        , NVL(SUBSTR(io.CLAS_CD, 1, 3), 'W00') AS GICS_LVL1
+                                                        , NVL(SUBSTR(io.CLAS_CD, 1, 5), 'W0000') AS GICS_LVL2
+                                                        , NVL(io.CLAS_CD, 'W000000') AS GICS_LVL3
+                                                FROM    (       
+                                                        SELECT  BASE_DT, PTF_CD, SUB_FUND_CD, FUND_NM, ISIN_CD , KOR_NM, FUND_NAV, ROUND(FUND_WGT, 8) AS FUND_WGT
+                                                                , ROUND(EVL_AMT/FUND_NAV,8) AS SEC_WGT
+                                                        FROM    (
+                                                                    SELECT  e.BASE_DT,e.PTF_CD, NULL AS SUB_FUND_CD, m.KOR_NM AS FUND_NM
+                                                                            , NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) AS ISIN_CD
+                                                                            , NVL(sm.KOR_NM, em.KOR_NM) AS KOR_NM                              -- 선물 내 이름 사용 후 없으면 주식 이름 사용
+                                                                            , n.NET_AST_TOT_AMT AS FUND_NAV, n.NET_AST_TOT_AMT/n.NET_AST_TOT_AMT AS FUND_WGT 
+                                                                            , SUM(e.EVL_AMT * NVL(w.WGT, 1)) AS EVL_AMT                        -- 선물 내 비중이 있으면 곱해주고 그게 아니라면 주식이니 그냥 1 곱합
+                                                                    FROM    AIVSTP.FSBD_PTF_MSTR m
+                                                                            INNER JOIN          AIVSTP.FSCD_PTF_ENTY_EVL_COMP e
+                                                                                        ON      m.PTF_CD = e.PTF_CD 
+                                                                                        AND     e.BASE_DT = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                                                                                        AND     e.DECMP_TCD =  'A'                               -- 통합펀드(PAR)의 경우에는 'A'로 분해, 개별펀드는 'E'로 분해
+                                                                                        AND     m.EX_TCD = e.EX_TCD                              -- KRW 
+                                                                                        AND     e.AST_CD  IN  ('STK', 'SFT')                     -- 주식과 선물 포함, 참고로 'A'로 분해시 ETF까지는 분해되어 있음
+                                                                        LEFT OUTER JOIN      AMAKT.FSBD_ERM_STK_MAP_MT em                 -- 삼성전자우 와 같은 종목을 삼성전자로 인식하기 위해 필요
+                                                                                            ON  e.ISIN_CD = em.ISIN_CD
+                                                                        LEFT OUTER JOIN      AMAKT.FSBD_ERM_IDX_ENTY_WGT w                    -- 선물 분해 로직
+                                                                                            ON  NVL(em.RM_ISIN_CD, e.ISIN_CD) = w.IDX_CD      -- 선물의 RM_ISIN_CD 를 활용해서 연결
+                                                                                            AND e.BASE_DT = w.BASE_DT 
+                                                                        LEFT OUTER JOIN      AMAKT.FSBD_ERM_STK_MAP_MT sm                  -- em 테이블에서 했던 것 동일 반복
+                                                                                            ON  w.ISIN_CD = sm.ISIN_CD   
+                                                                            LEFT OUTER JOIN     AIVSTP.FSCD_PTF_EVL_COMP n 
+                                                                                            ON  e.BASE_DT = n.BASE_DT   
+                                                                                            AND m.PTF_CD = n.PTF_CD     
+                                                                                            
+                                                                    WHERE m.PTF_CD = '{targetfund}'
+                                                                    GROUP BY  e.BASE_DT,e.PTF_CD,  m.KOR_NM,  NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) ,  NVL(sm.KOR_NM, em.KOR_NM) , n.NET_AST_TOT_AMT 
+                                                                    
+                                                                    UNION ALL               -- 개별펀드 포함
+                                                                                                            
+                                                                    SELECT  e.BASE_DT,k.PTF_CD, k.SUB_PTF_CD , m.KOR_NM AS FUND_NM
+                                                                            , NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) AS ISIN_CD
+                                                                            , NVL(sm.KOR_NM, em.KOR_NM) AS KOR_NM                             -- 선물 내 이름 사용 후 없으면 주식 이름 사용
+                                                                            , n.NET_AST_TOT_AMT AS FUND_NAV , k.WGT AS FUND_WGT
+                                                                            , SUM(e.EVL_AMT * NVL(w.WGT, 1)) AS EVL_AMT                        -- 선물 내 비중이 있으면 곱해주고 그게 아니라면 주식이니 그냥 1 곱합
+                                                                    FROM    AIVSTP.FSBD_PTF_MSTR m
+                                                                            INNER JOIN      (       
+                                                                                                SELECT   BASE_DT, PTF_CD, ISIN_CD AS SUB_PTF_CD , EVL_AMT , WGT 
+                                                                                                FROM     AIVSTP.FSCD_PTF_ENTY_EVL_COMP e1
+                                                                                                WHERE        BASE_DT = TO_DATE('{targetdate}', 'YYYY-MM-DD')
+                                                                                                    AND      DECMP_TCD = 'U'
+                                                                                                    AND      AST_CD IN ('SFD', 'FND')
+                                                                                                    AND      PTF_CD = '{targetfund}'
+                                                                                                    
+                                                                                            ) k
+                                                                                    ON      m.PTF_CD = k.SUB_PTF_CD
+                                                                                    AND     m.KOR_NM LIKE '%주식%'
+                                                                            LEFT JOIN          AIVSTP.FSCD_PTF_ENTY_EVL_COMP e
+                                                                                        ON      k.SUB_PTF_CD = e.PTF_CD 
+                                                                                        AND     e.BASE_DT = k.BASE_DT
+                                                                                        AND     e.DECMP_TCD =  'E' --  개별펀드는 'E'로 분해
+                                                                                        AND     e.AST_CD  IN  ('STK', 'SFT')                     -- 주식과 선물 포함, 참고로 'A'로 분해시 ETF까지는 분해되어 있음         
+                                                                            LEFT OUTER JOIN     AMAKT.FSBD_ERM_STK_MAP_MT em                     -- 삼성전자우 와 같은 종목을 삼성전자로 인식하기 위해 필요
+                                                                                            ON  e.ISIN_CD = em.ISIN_CD
+                                                                            LEFT OUTER JOIN     AMAKT.FSBD_ERM_IDX_ENTY_WGT w                    -- 선물 분해 로직
+                                                                                            ON  NVL(em.RM_ISIN_CD, e.ISIN_CD) = w.IDX_CD         -- 선물의 RM_ISIN_CD 를 활용해서 연결
+                                                                                            AND e.BASE_DT = w.BASE_DT 
+                                                                            LEFT OUTER JOIN     AMAKT.FSBD_ERM_STK_MAP_MT sm                     -- em 테이블에서 했던 것 동일 반복
+                                                                                            ON  w.ISIN_CD = sm.ISIN_CD 
+                                                                            LEFT OUTER JOIN     AIVSTP.FSCD_PTF_EVL_COMP n 
+                                                                                            ON  e.BASE_DT = n.BASE_DT   
+                                                                                            AND m.PTF_CD = n.PTF_CD            
+                                                                                            
+                                                                    GROUP BY  e.BASE_DT, k.PTF_CD, k.SUB_PTF_CD,  m.KOR_NM,  NVL(sm.RM_ISIN_CD, NVL(w.ISIN_CD, NVL(em.RM_ISIN_CD, e.ISIN_CD))) ,  NVL(sm.KOR_NM, em.KOR_NM) , n.NET_AST_TOT_AMT, k.WGT         
+                                                                )
+                                                        ) a
+                                                        LEFT OUTER JOIN AMAKT.FSBD_ERM_STK_MAP_MT s
+                                                                ON  a.ISIN_CD = s.ISIN_CD
+                                                        LEFT OUTER JOIN AMAKT.FSBD_ENTY_CCS_IO_MT io
+                                                                ON  a.BASE_DT BETWEEN io.ST_DT AND io.END_DT 
+                                                                AND NVL(s.RM_ISIN_CD, a.ISIN_CD) = io.ISIN_CD 
+                                                                AND io.CCS_TCD = 'STK' 
+                                                                AND io.CLAS_TYP = 'W3'
+                                                        LEFT OUTER JOIN AIVSTP.FSBD_CCS_MSTR c
+                                                                ON io.CLAS_CD = c.CLAS_CD 
+                                                                AND c.CCS_TCD = 'STK' 
+                                                                AND c.CLAS_TYP = 'W'   
+                                                        ORDER BY a.PTF_CD, a.FUND_NM , a.ISIN_CD
+                                                    ) A
+                                INNER JOIN KOSPI_SECTOR KS
+                                    ON A.ISIN_CD = KS.STDJONG                             
+                                LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR B
+                                                ON   B.CCS_TCD = 'STK' 
+                                                AND  B.CLAS_CD = A.GICS_LVL1
+                                LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR C
+                                                ON   C.CCS_TCD = 'STK' 
+                                                AND  C.CLAS_CD = A.GICS_LVL2
+                                LEFT OUTER JOIN      AIVSTP.FSBD_CCS_MSTR D
+                                                ON   D.CCS_TCD = 'STK' 
+                                                AND  D.CLAS_CD = A.GICS_LVL3        
+                                LEFT OUTER JOIN  
+                                                (       
+                                                        SELECT  * 
+                                                        FROM    AMAKT.FSBD_ENTY_CCS_IO_MT
+                                                        WHERE  1=1
+                                                        AND   CCS_TCD = 'STK' 
+                                                        AND   CLAS_TYP = 'S'
+                                                ) E
+                                        ON  A.ISIN_CD = E.ISIN_CD           
+                                        AND  A.BASE_DT   BETWEEN E.ST_DT AND E.END_DT 
+                                INNER JOIN           POLSEL.V_FUND_CD  V
+                                                ON   A.PTF_CD = V.AM_FUND_CD    
+                                                WHERE FUND_WGT NOT LIKE '100'
+                            )
+                            
+            SELECT FUND_NM
+                , ROUND(FIRST_VALUE(FUND_WGT) OVER (PARTITION BY FUND_NM)/100, 5) AS FUND_WGT
+            FROM RAWDATA
+            GROUP BY FUND_NM, FUND_WGT
+        '''.format(targetdate=enddate,targetfund = targetfund)
+
+
+            df_total = db_connect(total_df_sql)
+            df_total_wgt = db_connect(total_wgt_df_sql)
+            # df_cumret = db_connect(cumret_sql)
+
+            df_total['FUND_NM'] = convert_name(df_total['FUND_NM'])
+            df_total_wgt['FUND_NM'] = convert_name(df_total_wgt['FUND_NM'])
+
+            df_total = df_total.set_index('FUND_NM').fillna(0)
+            df_total_wgt = df_total_wgt.set_index('FUND_NM').fillna(0)
+            
+            active_temp = df_total_wgt[df_total_wgt.index.isin(column_order)]
+            index_temp = df_total_wgt[~df_total_wgt.index.isin(column_order)]
+
+            active_wgt = np.round(active_temp.to_numpy().sum() / (active_temp.to_numpy().sum()+index_temp.to_numpy().sum()), 6)
+            index_wgt = np.round(index_temp.to_numpy().sum() / (active_temp.to_numpy().sum()+index_temp.to_numpy().sum()), 6)
+            
+            df_total_wgt = df_total_wgt[df_total_wgt.index.isin(column_order)]
+
+            df_total_wgt['펀드내비중(액티브)'] = df_total_wgt['FUND_WGT']/sum(df_total_wgt['FUND_WGT'])
+            df_total_wgt = df_total_wgt.drop('FUND_WGT', axis=1).sort_values('펀드내비중(액티브)', ascending=False)
+
+            df_total_wgt.rename(index=dict_corp_name, inplace=True)
+
+            df_total = df_total * 100
+            df_total_wgt = df_total_wgt * 100
+
+
+            col1, col2 = st.columns([8,2])
+
+            col1.dataframe(df_total.style.format(precision=2), use_container_width=True)
+            col2.dataframe(df_total_wgt.style.format(precision=2), use_container_width=True)
+            
+            col2.write(f"Active: {np.round(active_wgt*100,2)}% / Index: {np.round(index_wgt*100,2)}%")
+
+            st.divider()
+
+            col1, col2, col3 = st.columns([7, 1.5, 1.5])
+            col1.subheader('통합펀드 내 개별펀드 수익률 기여도')
+
+            df_a = ctb_by_sector.copy().T
+            df_b = df_total_wgt.copy()
+            
+            df_b_aligned = df_a.index.map(df_b['펀드내비중(액티브)'])
+            df_result = df_a.mul(df_b_aligned, axis=0).T
+            df_result = df_result * active_wgt / 100
+            # df_result = df_result.sum(axis=1).sort_values(ascending=False)
+
+
+            col1.dataframe(df_result.style.highlight_max(axis=0, color='#C9E6F0').highlight_min(axis=0, color='#FFE3E3')\
+                           .format(precision=2), use_container_width=True)
+            
+            col2.subheader('Top Sectors')
+            df_result_temp = pd.DataFrame(df_result.sum(axis=1), columns=['기여도합(bp)']).sort_values('기여도합(bp)',ascending=False)
+            col2.dataframe(df_result_temp.style.format(precision=2), use_container_width=True)
+            
+            cont_sum = np.round(np.sum(df_result_temp)[0], 2)
+            col2.write(f"총 기여도: {cont_sum}bp")
+
+
+            col3.subheader('Top Funds')
+            df_result_temp = pd.DataFrame(df_result.sum(axis=0), columns=['기여도합(bp)']).sort_values('기여도합(bp)',ascending=False)
+            col3.dataframe(df_result_temp.style.format(precision=2), use_container_width=True)
+            
+            cont_sum = np.round(np.sum(df_result_temp)[0], 2)
+
+
+            
 
 if __name__ == '__main__' :
     main()
 
+ 
